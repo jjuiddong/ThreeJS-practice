@@ -3,10 +3,13 @@
  * @author mrdoob / http://mrdoob.com
  * @author alteredq / http://alteredqualia.com/
  * @author WestLangley / http://github.com/WestLangley
+ * @author jjuiddong / http://github.com/jjuiddong
+ *  - 2020-04-19
+ *      - camera moving
  */
 
-THREE.OrbitControls = function ( object, domElement ) {
-
+THREE.CameraControls = function ( object, domElement ) 
+{
     this.object = object;
     this.domElement = ( domElement !== undefined ) ? domElement : document;
 
@@ -14,7 +17,7 @@ THREE.OrbitControls = function ( object, domElement ) {
 
     this.enabled = true;
 
-    this.center = new THREE.Vector3();
+    this.center = new THREE.Vector3(); // look at position
 
     this.userZoom = true;
     this.userZoomSpeed = 1.0;
@@ -23,7 +26,7 @@ THREE.OrbitControls = function ( object, domElement ) {
     this.userRotateSpeed = 1.0;
 
     this.userPan = true;
-    this.userPanSpeed = 2.0;
+    this.userPanSpeed = 0.5;
 
     this.autoRotate = false;
     this.autoRotateSpeed = 2.0; // 30 seconds per round when fps is 60
@@ -51,6 +54,10 @@ THREE.OrbitControls = function ( object, domElement ) {
     var zoomEnd = new THREE.Vector2();
     var zoomDelta = new THREE.Vector2();
 
+    var moveStart = new THREE.Vector2();
+    var moveEnd = new THREE.Vector2();
+    var moveDelta = new THREE.Vector2();
+
     var phiDelta = 0;
     var thetaDelta = 0;
     var scale = 1;
@@ -65,16 +72,14 @@ THREE.OrbitControls = function ( object, domElement ) {
     var changeEvent = { type: 'change' };
 
 
-    this.rotateLeft = function ( angle ) {
-
-        if ( angle === undefined ) {
-
+    this.rotateLeft = function ( angle ) 
+    {
+        if ( angle === undefined ) 
+        {
             angle = getAutoRotationAngle();
-
         }
 
         thetaDelta -= angle;
-
     };
 
     this.rotateRight = function ( angle ) {
@@ -137,30 +142,73 @@ THREE.OrbitControls = function ( object, domElement ) {
 
     };
 
-    this.pan = function ( distance ) 
-    {
+    this.pan = function ( distance ) {
+
         distance.transformDirection( this.object.matrix );
-        distance.multiplyScalar( scope.userPanSpeed );
+        distance.y = 0;
+
+        var plane = new THREE.Plane(new THREE.Vector3(0,1,0), 0);
+        var d = plane.distanceToPoint(this.object.position);
+        var alpha = d / 12;
+
+        //distance.multiplyScalar( scope.userPanSpeed * alpha);
 
         this.object.position.add( distance );
         this.center.add( distance );
-
     };
 
-    this.update = function () 
+
+    // prevPos, nextPos : Vector2, screen pos
+    this.pan2 = function ( prevPos, nextPos ) 
     {
+        var p0 = new THREE.Vector3();
+        var p1 = new THREE.Vector3();
+
+        // screen pos -> 3d pos
+        p0.set( ( prevPos.x / window.innerWidth ) * 2 - 1, 
+            - ( prevPos.y / window.innerHeight ) * 2 + 1, 0.1 );
+        p1.set( ( nextPos.x / window.innerWidth ) * 2 - 1, 
+            - ( nextPos.y / window.innerHeight ) * 2 + 1, 0.1 );
+        p0.unproject( this.object );
+        p1.unproject( this.object );
+
+        var raycaster0 = new THREE.Raycaster(p0, this.object.getWorldDirection(), 0.1, 1000);
+        var raycaster1 = new THREE.Raycaster(p1, this.object.getWorldDirection(), 0.1, 1000);
+
+        var plane = new THREE.Plane(new THREE.Vector3(0,1,0), 0);
+        var d0 = raycaster0.ray.distanceToPlane(plane);
+        var d1 = raycaster1.ray.distanceToPlane(plane);
+
+        raycaster0.ray.origin.add(raycaster0.ray.direction.multiplyScalar(d0));
+        raycaster1.ray.origin.add(raycaster1.ray.direction.multiplyScalar(d1));
+
+        raycaster1.ray.origin.sub(raycaster0.ray.origin);
+
+        var offset = raycaster1.ray.origin.negate();
+        offset.multiplyScalar(100);
+
+        this.object.position.add( offset );
+        this.center.add( offset );
+    };
+
+
+    this.update = function () {
+
         var position = this.object.position;
         var offset = position.clone().sub( this.center );
 
         // angle from z-axis around y-axis
+
         var theta = Math.atan2( offset.x, offset.z );
 
         // angle from y-axis
+
         var phi = Math.atan2( Math.sqrt( offset.x * offset.x + offset.z * offset.z ), offset.y );
 
-        if ( this.autoRotate ) 
-        {
+        if ( this.autoRotate ) {
+
             this.rotateLeft( getAutoRotationAngle() );
+
         }
 
         theta += thetaDelta;
@@ -192,7 +240,6 @@ THREE.OrbitControls = function ( object, domElement ) {
         if ( lastPosition.distanceTo( this.object.position ) > 0 ) {
 
             this.dispatchEvent( changeEvent );
-
             lastPosition.copy( this.object.position );
 
         }
@@ -219,7 +266,7 @@ THREE.OrbitControls = function ( object, domElement ) {
 
         event.preventDefault();
 
-        if ( event.button === 0 ) {
+        if ( event.button === 2 ) {
 
             state = STATE.ROTATE;
 
@@ -231,10 +278,11 @@ THREE.OrbitControls = function ( object, domElement ) {
 
             zoomStart.set( event.clientX, event.clientY );
 
-        } else if ( event.button === 2 ) {
+        } else if ( event.button === 0 ) {
 
             state = STATE.PAN;
 
+            moveStart.set( event.clientX, event.clientY );
         }
 
         document.addEventListener( 'mousemove', onMouseMove, false );
@@ -280,8 +328,15 @@ THREE.OrbitControls = function ( object, domElement ) {
             var movementX = event.movementX || event.mozMovementX || event.webkitMovementX || 0;
             var movementY = event.movementY || event.mozMovementY || event.webkitMovementY || 0;
 
-            scope.pan( new THREE.Vector3( - movementX, movementY, 0 ) );
+            // moveEnd.set() = new THREE.Vector2();
+            // moveDelta = new THREE.Vector2();
+            moveEnd.set( event.clientX, event.clientY );
+            moveDelta.subVectors( moveEnd, moveStart );
 
+            scope.pan2( moveStart, moveEnd );
+            moveStart.copy( moveEnd );
+
+            //scope.pan( new THREE.Vector3(-movementX, movementY, 0) );
         }
 
     }
@@ -358,4 +413,4 @@ THREE.OrbitControls = function ( object, domElement ) {
 
 };
 
-THREE.OrbitControls.prototype = Object.create( THREE.EventDispatcher.prototype );
+THREE.CameraControls.prototype = Object.create( THREE.EventDispatcher.prototype );
